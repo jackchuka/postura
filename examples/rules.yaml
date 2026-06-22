@@ -1,0 +1,233 @@
+# postura default ruleset — a generic GitHub security baseline, expressed as data.
+# Each rule's `pass` is a CEL expression over the scope's fact fields (bound as
+# top-level variables) plus `cfg` (the rule's merged config). `applies_when`
+# scopes a rule to matching targets. When a fact a rule needs was not readable
+# (e.g. missing scope), the collector omits it and postura reports unknown
+# automatically — no per-rule annotation needed. Tune any `config` knob per
+# enterprise/org/repo in the policy-config file (--config).
+rules:
+  # ---- enterprise ---------------------------------------------------------
+  - id: ENT-1
+    scope: enterprise
+    severity: error
+    title: SAML single sign-on is configured for the enterprise
+    pass: saml_sso_url != null
+    fix_hint: Enterprise Settings -> Authentication security -> configure SAML single sign-on
+
+  - id: ENT-2
+    scope: enterprise
+    severity: warn
+    title: Enterprise base repository permission is not write/admin
+    pass: >-
+      (default_repository_permission == null ? "NO_POLICY" : default_repository_permission)
+        in ["NO_POLICY", "NONE", "READ"]
+    fix_hint: "Enterprise Settings -> Policies -> Repositories -> Base permissions: set to None or Read (or leave to orgs)"
+
+  - id: ENT-3
+    scope: enterprise
+    severity: info
+    title: IP allow list is enabled for the enterprise
+    enabled: false # opt-in: enable per enterprise in --config when network policy requires it
+    pass: ip_allow_list_enabled == "ENABLED"
+    fix_hint: Enterprise Settings -> Authentication security -> Enable IP allow list
+
+  - id: ENT-4
+    scope: enterprise
+    severity: warn
+    title: Private/internal repository forking is restricted
+    config:
+      allowed_forking: ["DISABLED", "NO_POLICY"] # tighten to ["DISABLED"] to forbid deferral
+    pass: allow_private_repository_forking in cfg.allowed_forking
+    fix_hint: "Enterprise Settings -> Policies -> Repositories -> Repository forking: restrict forking of private/internal repos"
+
+  - id: ENT-5
+    scope: enterprise
+    severity: error
+    title: Enterprise has no outside collaborators
+    pass: outside_collaborator_count == 0
+    fix_hint: "Enterprise -> People -> Outside collaborators: convert to members or remove"
+
+  # ---- org ----------------------------------------------------------------
+  - id: ORG-1
+    scope: org
+    severity: error
+    title: Two-factor authentication is enforced org-wide
+    pass: two_factor_requirement_enabled == true
+    fix_hint: Org Settings -> Authentication security -> Require two-factor authentication
+
+  - id: ORG-2
+    scope: org
+    severity: warn
+    title: Owner/admin count is proportionate to org size
+    config:
+      max_admins: 5
+      max_admin_ratio: 0.25
+    pass: >-
+      admin_count <= cfg.max_admins &&
+      (member_count == 0 || double(admin_count) / double(member_count) <= cfg.max_admin_ratio)
+    fix_hint: "Org Settings -> People: review who holds Owner; downgrade to Member where possible"
+
+  - id: ORG-3
+    scope: org
+    severity: warn
+    title: Outside collaborators are known and current
+    config:
+      allowed_collaborators: [] # allowlist expected outside-collaborator logins per org
+    pass: outside_collaborators.all(c, c in cfg.allowed_collaborators)
+    fix_hint: "Org Settings -> Outside collaborators: remove anyone no longer active, or allowlist expected logins in --config"
+
+  - id: ORG-4
+    scope: org
+    severity: warn
+    title: Default member repository permission is not write/admin
+    pass: >-
+      (default_repository_permission == null ? "none" : default_repository_permission)
+        in ["none", "read"]
+    fix_hint: "Org Settings -> Member privileges -> Base permissions: set to None or Read"
+
+  - id: ORG-5
+    scope: org
+    severity: info
+    title: No member invitations pending longer than the allowed age
+    config:
+      max_invite_age_days: 30
+    pass: invitations.all(i, i.age_days == null || i.age_days <= cfg.max_invite_age_days)
+    fix_hint: "Org Settings -> People -> Pending invitations: cancel or re-send stale invites"
+
+  - id: ORG-6
+    scope: org
+    severity: warn
+    title: Members cannot create repositories
+    pass: members_can_create_repositories == false
+    fix_hint: "Org Settings -> Member privileges -> Repository creation: disable member repo creation"
+
+  - id: ORG-7
+    scope: org
+    severity: warn
+    title: New repositories get secret scanning, push protection, and Dependabot by default
+    pass: >-
+      secret_scanning_enabled_for_new_repositories == true &&
+      secret_scanning_push_protection_enabled_for_new_repositories == true &&
+      dependabot_alerts_enabled_for_new_repositories == true
+    fix_hint: Org Settings -> Code security -> enable "Automatically enable for new repositories" for Secret scanning, Push protection, and Dependabot alerts
+
+  - id: ORG-8
+    scope: org
+    severity: warn
+    title: Members cannot fork private/internal repositories
+    pass: members_can_fork_private_repositories == false
+    fix_hint: "Org Settings -> Member privileges -> Repository forking: disable forking of private/internal repos"
+
+  - id: ORG-9
+    scope: org
+    severity: info
+    title: Org teams are private (privacy = closed)
+    config:
+      allowed_secret_teams: [] # teams intentionally kept secret
+    pass: teams.all(t, t.privacy == "closed" || t.slug in cfg.allowed_secret_teams)
+    fix_hint: "Org Settings -> Teams: set team visibility to 'closed' unless intentionally secret and allowlisted"
+
+  - id: ORG-10
+    scope: org
+    severity: warn
+    title: Organization-role grants of broad repo access are intentional and minimal
+    config:
+      broad_role_markers: ["admin", "write", "maintain"] # role-name substrings treated as broad
+      allowed_broad_teams: [] # teams permitted to hold a broad org role
+    pass: >-
+      organization_roles.all(r,
+        cfg.broad_role_markers.exists(m, r.role.lowerAscii().contains(m))
+          ? (r.users.size() == 0 && r.teams.all(t, t.slug in cfg.allowed_broad_teams))
+          : true)
+    fix_hint: "Org Settings -> Organization roles: limit broad (all-repository) admin/write/maintain to one intentional ops team; remove individual-user assignments. Needs admin:org to read."
+
+  # ---- repo ---------------------------------------------------------------
+  - id: REPO-1
+    scope: repo
+    severity: error
+    title: Default branch requires a pull request before merging
+    pass: archived == true || protection.required_pull_request_reviews == true
+    fix_hint: Repo Settings -> Branches/Rules -> require a pull request before merging on the default branch (add push bots to bypass_actors as actor_type=Integration)
+
+  - id: REPO-2
+    scope: repo
+    severity: error
+    title: At least one approving review is required
+    pass: archived == true || protection.required_approving_review_count >= 1
+    fix_hint: Branch protection / ruleset -> require approvals (>= 1) on the default branch
+
+  - id: REPO-3
+    scope: repo
+    severity: error
+    title: Secret scanning is enabled (public repos)
+    applies_when: archived != true && visibility == "public"
+    pass: secret_scanning == "enabled"
+    fix_hint: Repo Settings -> Code security and analysis -> enable Secret scanning (private/internal need GitHub Advanced Security)
+
+  - id: REPO-4
+    scope: repo
+    severity: warn
+    title: Dependabot / vulnerability alerts are enabled
+    pass: archived == true || vulnerability_alerts == true
+    fix_hint: Repo Settings -> Code security and analysis -> enable Dependabot alerts
+
+  - id: REPO-5
+    scope: repo
+    severity: info
+    title: CODEOWNERS file is present
+    pass: archived == true || codeowners == true
+    fix_hint: Add a CODEOWNERS file in .github/, repo root, or docs/
+
+  - id: REPO-6
+    scope: repo
+    severity: info
+    title: Public repository declares a license
+    pass: visibility != "public" || (license != null && license != "NOASSERTION")
+    fix_hint: Add a LICENSE file so the repository's license is detected
+
+  - id: REPO-7
+    scope: repo
+    severity: info
+    title: Default branch is governed by at least one active ruleset
+    enabled: false # opt-in: for orgs standardizing on rulesets over classic protection
+    pass: archived == true || ruleset_count >= 1
+    fix_hint: "Repo Settings -> Rules: add a branch ruleset targeting the default branch"
+
+  - id: REPO-8
+    scope: repo
+    severity: info
+    title: Archived repositories are not public
+    enabled: false # opt-in: enable per org where public archives are unwanted
+    applies_when: archived == true
+    pass: visibility != "public"
+    fix_hint: "Archived repos are read-only, so exposure is the only risk. To privatize: unarchive -> set private -> re-archive."
+
+  - id: REPO-9
+    scope: repo
+    severity: error
+    title: Push protection is enabled (public repos)
+    applies_when: archived != true && visibility == "public"
+    pass: secret_scanning_push_protection == "enabled"
+    fix_hint: Repo Settings -> Code security and analysis -> enable Push protection
+
+  - id: REPO-10
+    scope: repo
+    severity: info
+    title: Default branch requires code owner review
+    pass: archived == true || protection.require_code_owner_reviews == true
+    fix_hint: Branch protection / ruleset on the default branch -> Require review from Code Owners
+
+  - id: REPO-11
+    scope: repo
+    severity: warn
+    title: No team holds admin/maintain via a direct per-repo grant (push cap)
+    pass: teams.all(t, t.permission != "admin" && t.permission != "maintain")
+    fix_hint: "Cap direct (github_team_repository) team grants at 'push'; downgrade any team holding admin/maintain. Org-role grants are audited by ORG-10."
+
+  - id: REPO-12
+    scope: repo
+    severity: warn
+    title: PR-bypass is restricted to automation (bots/Apps)
+    applies_when: archived != true && protection.required_pull_request_reviews == true
+    pass: protection.pr_bypass_actor_types.all(a, a == "Integration")
+    fix_hint: "On any ruleset that requires a PR, keep bypass to bot/App actors only (actor_type Integration); remove Team/RepositoryRole/OrganizationAdmin/user bypass."

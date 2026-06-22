@@ -1,0 +1,22 @@
+# Example policy-config. Pass with: postura run --org acme --config examples/config.yaml
+# Overrides merge most-specific-wins: rule default -> enterprise -> org -> repo.
+# In a rule block, the reserved keys `enabled` (bool) and `severity` (string)
+# tune the rule itself; every other key is merged into the rule's `cfg`.
+
+enterprises:
+  acme-inc:
+    ENT-3: { enabled: true } # require the IP allow list for this enterprise
+
+orgs:
+  acme:
+    ORG-2: { max_admins: 8 } # lean ops: more owners than the default 5
+    ORG-3: { allowed_collaborators: [external-auditor, vendor-bot] } # known, expected
+    ORG-9: { severity: warn } # team privacy matters more here: info -> warn
+    ORG-10: { allowed_broad_teams: [sre] } # the one team allowed all-repository admin
+  acme-labs:
+    REPO-8: { enabled: true } # flag public archived repos in this org
+
+repos:
+  acme/legacy-mirror:
+    REPO-1: { enabled: false } # read-only mirror; PR-before-merge not applicable
+    REPO-4: { enabled: false } # mirror has no upstream Dependabot story
