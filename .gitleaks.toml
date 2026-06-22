@@ -1,0 +1,12 @@
+# Extends gitleaks' default ruleset and adds project-specific allowlists.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Go module checksums in go.sum/go.mod are not secrets (h1: base64 hashes)"
+# The push hook scans via `gitleaks stdin`, so file-path allowlisting is unavailable;
+# match the go.sum/go.mod checksum line format instead.
+regexTarget = "line"
+regexes = [
+  '''\sh1:[A-Za-z0-9+/]{43}=''',
+]
