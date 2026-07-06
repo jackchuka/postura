@@ -40,6 +40,7 @@ var (
 		"name", "owner", "archived", "visibility",
 		"secret_scanning", "secret_scanning_push_protection",
 		"vulnerability_alerts", "codeowners", "license",
+		"dependabot_config", "renovate_config",
 		"teams", "ruleset_count", "protection",
 	}
 )

@@ -231,3 +231,10 @@ rules:
     applies_when: archived != true && protection.required_pull_request_reviews == true
     pass: protection.pr_bypass_actor_types.all(a, a == "Integration")
     fix_hint: "On any ruleset that requires a PR, keep bypass to bot/App actors only (actor_type Integration); remove Team/RepositoryRole/OrganizationAdmin/user bypass."
+
+  - id: REPO-13
+    scope: repo
+    severity: info
+    title: Automated dependency updates are configured (Dependabot or Renovate)
+    pass: archived == true || dependabot_config == true || renovate_config == true
+    fix_hint: "Add .github/dependabot.yml (version updates) or a Renovate config (renovate.json)"

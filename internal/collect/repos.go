@@ -15,7 +15,19 @@ import (
 // secondary-rate-limit pressure modest (the client also retries on a throttle).
 const repoWorkers = 8
 
-var codeownersPaths = []string{".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"}
+// Committed-file paths whose presence drives repo facts. All are shallow, so a
+// single recursive tree of the default branch (see repoFiles) resolves every one
+// in one API call. The deprecated package.json "renovate" key is intentionally
+// not detected.
+var (
+	codeownersFilePaths = []string{".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"}
+	dependabotFilePaths = []string{".github/dependabot.yml", ".github/dependabot.yaml"}
+	renovateFilePaths   = []string{
+		"renovate.json", "renovate.json5",
+		".renovaterc", ".renovaterc.json", ".renovaterc.json5",
+		".github/renovate.json", ".github/renovate.json5",
+	}
+)
 
 // Repos collects per-repo facts. With no names it audits every non-forked repo
 // in the org. Each returned object is fully normalized against RepoVars.
@@ -113,9 +125,18 @@ func repoFacts(ctx context.Context, c *github.Client, org string, r *github.Repo
 		f["vulnerability_alerts"] = enabled
 	}
 
-	// Omit on uncertainty so the rule reports unknown rather than a false answer.
-	if present, known := codeownersStatus(ctx, c, org, name); known {
-		f["codeowners"] = present
+	// CODEOWNERS plus automated dependency-update config (version updates), all
+	// resolved from one default-branch tree read. Each fact is omitted on
+	// uncertainty so the rule reports unknown rather than a false "absent".
+	files := repoFiles(ctx, c, org, name, r.GetDefaultBranch())
+	if files.codeownersKnown {
+		f["codeowners"] = files.codeowners
+	}
+	if files.dependabotKnown {
+		f["dependabot_config"] = files.dependabot
+	}
+	if files.renovateKnown {
+		f["renovate_config"] = files.renovate
 	}
 
 	// Teams holding a direct per-repo grant on this repo. A repo absent from the
@@ -137,25 +158,71 @@ func repoFacts(ctx context.Context, c *github.Client, org string, r *github.Repo
 	return f
 }
 
-// codeownersStatus reports whether a CODEOWNERS file exists and whether that
-// answer is trustworthy. `known` is false when a non-404 error (permission or
-// transient) leaves absence unproven; the caller then omits the fact so the rule
-// reports unknown instead of a false "missing".
-func codeownersStatus(ctx context.Context, c *github.Client, org, repo string) (present, known bool) {
-	uncertain := false
-	for _, p := range codeownersPaths {
-		_, _, resp, err := c.Repositories.GetContents(ctx, org, repo, p, nil)
-		if err == nil {
-			return true, true
+// fileFacts holds the presence of committed config files, each paired with a
+// Known flag that is false when absence could not be proven (the caller then
+// omits the fact so the rule reports unknown, never a false "absent").
+type fileFacts struct {
+	codeowners, codeownersKnown bool
+	dependabot, dependabotKnown bool
+	renovate, renovateKnown     bool
+}
+
+// repoFiles resolves every committed-file fact from a single recursive tree of
+// the default branch, instead of probing each path with its own Contents call.
+//
+// Absence semantics: a matched blob proves presence (true, known). A complete
+// (non-truncated) tree with no match proves absence (false, known). An empty
+// repository — no default branch, or the tree endpoint's 404/409 — is likewise a
+// definitive absence. Every other error, and a truncated tree in which a path was
+// not seen, leaves absence unproven (Known=false → unknown). The tree caps at
+// 100k entries; all the paths here are shallow, so truncation only bites
+// pathologically large repos.
+func repoFiles(ctx context.Context, c *github.Client, org, repo, branch string) fileFacts {
+	if branch == "" {
+		return allAbsent() // no default branch => no commits => nothing present
+	}
+	// go-github places the ref unescaped in the URL path, so a default branch
+	// whose name contains a slash (e.g. "release/v1") won't resolve; every file
+	// fact for that repo then degrades to unknown. Rare, and it fails safe.
+	tree, resp, err := c.Git.GetTree(ctx, org, repo, branch, true)
+	if err != nil {
+		// An empty repository has no tree (404, or 409 "Git Repository is empty"):
+		// definitive absence. Any other error leaves every fact unknown.
+		if resp != nil && (resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusConflict) {
+			return allAbsent()
 		}
-		if resp == nil || resp.StatusCode != http.StatusNotFound {
-			uncertain = true // not a clean 404: can't prove absence from this path
+		return fileFacts{}
+	}
+
+	present := make(map[string]bool, len(tree.Entries))
+	for _, e := range tree.Entries {
+		if e.GetType() == "blob" {
+			present[e.GetPath()] = true
 		}
 	}
-	if uncertain {
-		return false, false
+
+	truncated := tree.GetTruncated()
+	// fact returns (present, known): a hit is always trustworthy; a miss is only
+	// trustworthy when the tree was complete.
+	fact := func(paths []string) (bool, bool) {
+		for _, p := range paths {
+			if present[p] {
+				return true, true
+			}
+		}
+		return false, !truncated
 	}
-	return false, true // every path returned a clean 404: definitively absent
+
+	var f fileFacts
+	f.codeowners, f.codeownersKnown = fact(codeownersFilePaths)
+	f.dependabot, f.dependabotKnown = fact(dependabotFilePaths)
+	f.renovate, f.renovateKnown = fact(renovateFilePaths)
+	return f
+}
+
+// allAbsent is the definitive "no files present" result (every fact known-false).
+func allAbsent() fileFacts {
+	return fileFacts{codeownersKnown: true, dependabotKnown: true, renovateKnown: true}
 }
 
 // directRepoGrants maps "owner/repo" to the teams that hold a direct

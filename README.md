@@ -300,6 +300,8 @@ list drifts from it. A field that couldn't be read is omitted (→ the rule repo
 | `secret_scanning`                 | secret-scanning status (`enabled`/`disabled`)                                                                                                  |
 | `secret_scanning_push_protection` | push-protection status (`enabled`/`disabled`)                                                                                                  |
 | `vulnerability_alerts`            | whether Dependabot alerts are enabled                                                                                                          |
+| `dependabot_config`               | whether a Dependabot version-updates config exists (`.github/dependabot.yml`)                                                                  |
+| `renovate_config`                 | whether a Renovate config exists (`renovate.json`, `.renovaterc*`, or under `.github/`)                                                        |
 | `codeowners`                      | whether a CODEOWNERS file exists                                                                                                               |
 | `license`                         | SPDX license id, or null                                                                                                                       |
 | `teams`                           | teams with a direct grant, each `{slug, permission}`                                                                                           |
@@ -307,6 +309,10 @@ list drifts from it. A field that couldn't be read is omitted (→ the rule repo
 | `protection`                      | branch-protection facts: `{required_pull_request_reviews, required_approving_review_count, require_code_owner_reviews, pr_bypass_actor_types}` |
 
 </details>
+
+> **Note:** `dependabot_config` / `renovate_config` detect only *committed* config.
+> A repo onboarded to Renovate via a shared org preset (in the org's `.github`
+> repo) or the Renovate App's default, with no repo-level file, is not detected.
 
 ## How it works
 
