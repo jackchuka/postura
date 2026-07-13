@@ -3,7 +3,7 @@ module github.com/jackchuka/postura
 go 1.26.5
 
 require (
-	github.com/google/cel-go v0.29.1
+	github.com/google/cel-go v0.29.2
 	github.com/google/go-github/v84 v84.0.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/oauth2 v0.36.0
