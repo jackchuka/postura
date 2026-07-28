@@ -7,11 +7,9 @@
 </p>
 
 <p>
-  <a href="https://pkg.go.dev/github.com/jackchuka/postura"><img src="https://pkg.go.dev/badge/github.com/jackchuka/postura.svg" alt="Go Reference"></a>
-  <a href="https://goreportcard.com/report/github.com/jackchuka/postura"><img src="https://goreportcard.com/badge/github.com/jackchuka/postura" alt="Go Report Card"></a>
   <a href="https://github.com/jackchuka/postura/actions/workflows/test.yml"><img src="https://github.com/jackchuka/postura/actions/workflows/test.yml/badge.svg" alt="Test"></a>
   <a href="https://github.com/jackchuka/postura/releases"><img src="https://img.shields.io/github/v/release/jackchuka/postura?sort=semver" alt="Release"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
 </p>
 
 </div>
