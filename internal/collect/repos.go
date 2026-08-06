@@ -132,6 +132,9 @@ func repoFacts(ctx context.Context, c *github.Client, org string, r *github.Repo
 	if files.codeownersKnown {
 		f["codeowners"] = files.codeowners
 	}
+	if n, ok := codeownersErrorCount(ctx, c, org, name, files); ok {
+		f["codeowners_error_count"] = n
+	}
 	if files.dependabotKnown {
 		f["dependabot_config"] = files.dependabot
 	}
@@ -223,6 +226,31 @@ func repoFiles(ctx context.Context, c *github.Client, org, repo, branch string) 
 // allAbsent is the definitive "no files present" result (every fact known-false).
 func allAbsent() fileFacts {
 	return fileFacts{codeownersKnown: true, dependabotKnown: true, renovateKnown: true}
+}
+
+// codeownersErrorCount asks GitHub's own CODEOWNERS linter how many syntax and
+// unknown-owner errors the default branch's file has, returning the count and
+// whether it is trustworthy. An unknown owner is the failure that matters: GitHub
+// silently ignores the bad line, so a repo requiring code-owner review can end up
+// enforcing nothing on those paths.
+//
+// The call is only worth making for a repo proven to have the file: a proven
+// absence has vacuously zero errors, and an unproven presence cannot be scored at
+// all. Any non-200 leaves the count unknown rather than a false clean bill —
+// including the 404 GitHub returns when it sees no CODEOWNERS, which contradicts
+// the tree read that got us here.
+func codeownersErrorCount(ctx context.Context, c *github.Client, org, repo string, files fileFacts) (int, bool) {
+	if !files.codeownersKnown {
+		return 0, false
+	}
+	if !files.codeowners {
+		return 0, true
+	}
+	errs, _, err := c.Repositories.GetCodeownersErrors(ctx, org, repo, nil)
+	if err != nil {
+		return 0, false
+	}
+	return len(errs.Errors), true
 }
 
 // directRepoGrants maps "owner/repo" to the teams that hold a direct

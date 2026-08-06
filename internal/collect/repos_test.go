@@ -155,3 +155,107 @@ func TestRepoFilesUncertain(t *testing.T) {
 		t.Errorf("all facts must be unknown on 403, got %+v", got)
 	}
 }
+
+// serveCodeownersErrors serves a fixed status/body for GitHub's CODEOWNERS
+// linter endpoint and pins the request path. status 0 means 200 OK with body.
+func serveCodeownersErrors(t *testing.T, body string, status int) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/acme/web/codeowners/errors" {
+			t.Errorf("request path = %q, want the codeowners errors endpoint", r.URL.Path)
+		}
+		if status != 0 && status != http.StatusOK {
+			w.WriteHeader(status)
+			return
+		}
+		_, _ = io.WriteString(w, body)
+	}
+}
+
+// codeownersPresent is the fileFacts a repo with a proven CODEOWNERS file carries.
+var codeownersPresent = fileFacts{codeowners: true, codeownersKnown: true}
+
+func TestCodeownersErrorCount(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want int
+	}{
+		{
+			name: "a file GitHub finds no fault with scores zero",
+			body: `{"errors":[]}`,
+			want: 0,
+		},
+		{
+			name: "each flagged line counts once",
+			body: `{"errors":[
+				{"line":3,"kind":"Unknown owner","path":".github/CODEOWNERS",
+				 "message":"make sure @acme/ghosts exists and has write access"},
+				{"line":7,"kind":"Invalid owner","path":".github/CODEOWNERS",
+				 "message":"invalid owner"}
+			]}`,
+			want: 2,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := testClient(t, serveCodeownersErrors(t, tc.body, http.StatusOK))
+			got, known := codeownersErrorCount(context.Background(), c, "acme", "web", codeownersPresent)
+			if !known {
+				t.Fatal("a 200 from the linter is a trustworthy count, got unknown")
+			}
+			if got != tc.want {
+				t.Errorf("codeownersErrorCount = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// The linter's verdict is unreadable on any non-200. A 404 is included
+// deliberately: it means GitHub sees no CODEOWNERS where the tree proved one, so
+// the disagreement leaves the count unproven rather than a false clean bill.
+func TestCodeownersErrorCountUnreadable(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusForbidden, http.StatusInternalServerError} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			c := testClient(t, serveCodeownersErrors(t, "", status))
+			if _, known := codeownersErrorCount(context.Background(), c, "acme", "web", codeownersPresent); known {
+				t.Errorf("count must be unknown on %d, got known", status)
+			}
+		})
+	}
+}
+
+// Presence drives whether the extra call is worth making at all: a repo proven to
+// have no CODEOWNERS has vacuously no errors, and one whose presence is unproven
+// cannot be scored. Neither may spend an API call.
+func TestCodeownersErrorCountSkipsCallWithoutAProvenFile(t *testing.T) {
+	cases := []struct {
+		name      string
+		files     fileFacts
+		wantCount int
+		wantKnown bool
+	}{
+		{
+			name:      "no CODEOWNERS is a definitive zero",
+			files:     fileFacts{codeowners: false, codeownersKnown: true},
+			wantCount: 0,
+			wantKnown: true,
+		},
+		{
+			name:      "unproven presence leaves the count unknown",
+			files:     fileFacts{codeowners: false, codeownersKnown: false},
+			wantCount: 0,
+			wantKnown: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+				t.Errorf("unexpected API call to %q; the linter must not be probed here", r.URL.Path)
+			})
+			got, known := codeownersErrorCount(context.Background(), c, "acme", "web", tc.files)
+			if got != tc.wantCount || known != tc.wantKnown {
+				t.Errorf("codeownersErrorCount = (%d, %v), want (%d, %v)", got, known, tc.wantCount, tc.wantKnown)
+			}
+		})
+	}
+}

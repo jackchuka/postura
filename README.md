@@ -301,6 +301,7 @@ list drifts from it. A field that couldn't be read is omitted (→ the rule repo
 | `dependabot_config`               | whether a Dependabot version-updates config exists (`.github/dependabot.yml`)                                                                  |
 | `renovate_config`                 | whether a Renovate config exists (`renovate.json`, `.renovaterc*`, or under `.github/`)                                                        |
 | `codeowners`                      | whether a CODEOWNERS file exists                                                                                                               |
+| `codeowners_error_count`          | errors GitHub's CODEOWNERS linter reports (unknown owners, bad syntax); `0` when no file exists                                                |
 | `license`                         | SPDX license id, or null                                                                                                                       |
 | `teams`                           | teams with a direct grant, each `{slug, permission}`                                                                                           |
 | `ruleset_count`                   | active branch rulesets on the default branch                                                                                                   |
