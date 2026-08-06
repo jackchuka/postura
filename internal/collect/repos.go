@@ -2,6 +2,7 @@ package collect
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sort"
 	"strings"
@@ -154,9 +155,12 @@ func repoFacts(ctx context.Context, c *github.Client, org string, r *github.Repo
 		}
 	}
 
-	prot, rulesetCount := protection(ctx, c, org, name, r.GetDefaultBranch())
-	f["protection"] = prot
-	f["ruleset_count"] = rulesetCount
+	// Branch protection and rulesets, both omitted together when either read was
+	// refused: an unreadable branch is not an unprotected one.
+	if prot, rulesetCount, ok := protection(ctx, c, org, name, r.GetDefaultBranch()); ok {
+		f["protection"] = prot
+		f["ruleset_count"] = rulesetCount
+	}
 
 	return f
 }
@@ -333,30 +337,48 @@ func highestPerm(p *github.RepositoryPermissions) string {
 // protection folds classic branch protection and repository rulesets into one
 // normalized object. Many orgs protect the default branch with rulesets,
 // which the classic protection endpoint does not return, so both are read and
-// the stricter outcome wins for each field. Returns the protection facts and
-// the count of active, default-branch-targeting rulesets.
-func protection(ctx context.Context, c *github.Client, org, repo, branch string) (map[string]any, int) {
+// the stricter outcome wins for each field. Returns the protection facts, the
+// count of active default-branch-targeting rulesets, and whether both surfaces
+// were actually readable.
+//
+// The zero value here says "nothing is required", which is exactly what a wide-open
+// branch looks like — so a read the token isn't allowed to make must not fall
+// through to it. A token without admin on the repo would otherwise report every
+// protection rule as a confident failure across the whole org.
+func protection(ctx context.Context, c *github.Client, org, repo, branch string) (map[string]any, int, bool) {
 	p := map[string]any{
 		"required_pull_request_reviews":   false,
 		"required_approving_review_count": 0,
 		"require_code_owner_reviews":      false,
 		"pr_bypass_actor_types":           []any{},
 	}
+	// An empty repository has no default branch, so there is nothing to protect.
 	if branch == "" {
-		return p, 0
+		return p, 0, true
 	}
 
-	// Classic branch protection (404 when none / rulesets-only).
-	if bp, _, err := c.Repositories.GetBranchProtection(ctx, org, repo, branch); err == nil && bp != nil {
+	// Classic branch protection. The endpoint answers 404 both for a branch that
+	// has none and for a token without admin on the repo — go-github tells the two
+	// apart by the response message and normalizes the first to a sentinel. Only
+	// that one is proof; every other error means the read failed.
+	bp, _, err := c.Repositories.GetBranchProtection(ctx, org, repo, branch)
+	switch {
+	case err == nil:
 		if rev := bp.GetRequiredPullRequestReviews(); rev != nil {
 			p["required_pull_request_reviews"] = true
 			p["required_approving_review_count"] = rev.RequiredApprovingReviewCount
 			p["require_code_owner_reviews"] = rev.RequireCodeOwnerReviews
 		}
+	case errors.Is(err, github.ErrBranchNotProtected):
+	default:
+		return nil, 0, false
 	}
 
-	count := foldRulesets(ctx, c, org, repo, branch, p)
-	return p, count
+	count, ok := foldRulesets(ctx, c, org, repo, branch, p)
+	if !ok {
+		return nil, 0, false
+	}
+	return p, count, true
 }
 
 type rulesetSummary struct {
@@ -387,11 +409,13 @@ type rulesetDetail struct {
 // typed ruleset model churns across versions), folds any pull_request rule that
 // targets the default branch into the protection facts (stricter wins), and
 // collects bypass-actor types from PR-requiring rulesets for REPO-12. Returns the
-// number of active, default-branch-targeting rulesets.
-func foldRulesets(ctx context.Context, c *github.Client, org, repo, branch string, p map[string]any) int {
+// number of active, default-branch-targeting rulesets and whether every ruleset
+// was readable — a repo with none answers 200 with an empty list, so any error
+// is a read failure, and skipping one could miss the rule that protects the branch.
+func foldRulesets(ctx context.Context, c *github.Client, org, repo, branch string, p map[string]any) (int, bool) {
 	var summaries []rulesetSummary
 	if _, err := getJSON(ctx, c, "repos/"+org+"/"+repo+"/rulesets?includes_parents=false", &summaries); err != nil {
-		return 0
+		return 0, false
 	}
 	bypass := map[string]bool{}
 	count := 0
@@ -401,7 +425,7 @@ func foldRulesets(ctx context.Context, c *github.Client, org, repo, branch strin
 		}
 		var d rulesetDetail
 		if _, err := getJSON(ctx, c, "repos/"+org+"/"+repo+"/rulesets/"+itoa(s.ID), &d); err != nil {
-			continue
+			return 0, false
 		}
 		if !targetsBranch(d.Conditions.RefName.Include, branch) {
 			continue
@@ -435,7 +459,7 @@ func foldRulesets(ctx context.Context, c *github.Client, org, repo, branch strin
 		}
 		p["pr_bypass_actor_types"] = types
 	}
-	return count
+	return count, true
 }
 
 // targetsBranch reports whether a ruleset's ref_name include list applies to the

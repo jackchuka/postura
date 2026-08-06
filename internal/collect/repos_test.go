@@ -259,3 +259,149 @@ func TestCodeownersErrorCountSkipsCallWithoutAProvenFile(t *testing.T) {
 		})
 	}
 }
+
+// protectionRoutes drives the three endpoints protection() reads. A zero status
+// means 200 with the paired body; any other status is returned bare.
+type protectionRoutes struct {
+	protStatus   int
+	protBody     string
+	listStatus   int
+	listBody     string
+	detailStatus int
+	detailBody   string
+}
+
+func serveProtection(t *testing.T, r protectionRoutes) http.HandlerFunc {
+	t.Helper()
+	write := func(w http.ResponseWriter, status int, body string) {
+		if status != 0 && status != http.StatusOK {
+			w.WriteHeader(status)
+		}
+		_, _ = io.WriteString(w, body)
+	}
+	return func(w http.ResponseWriter, req *http.Request) {
+		p := req.URL.Path
+		switch {
+		case p == "/repos/acme/web/branches/main/protection":
+			write(w, r.protStatus, r.protBody)
+		case p == "/repos/acme/web/rulesets":
+			write(w, r.listStatus, r.listBody)
+		case strings.HasPrefix(p, "/repos/acme/web/rulesets/"):
+			write(w, r.detailStatus, r.detailBody)
+		default:
+			t.Errorf("unexpected request path %q", p)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}
+}
+
+// unprotected is the body GitHub pairs with its 404 for a branch that genuinely
+// carries no classic protection, as opposed to one the token may not read.
+const unprotected = `{"message":"Branch not protected"}`
+
+// A token that cannot read branch protection must leave the facts unproven. The
+// permissive zero value ("nothing is required") is indistinguishable from a real
+// wide-open repo, so emitting it turns a permission gap into a wall of confident
+// false failures across every protection rule at once.
+func TestProtectionUnreadable(t *testing.T) {
+	const noRulesets = `[]`
+	const oneRuleset = `[{"id":1,"target":"branch","enforcement":"active"}]`
+
+	cases := map[string]protectionRoutes{
+		"classic protection forbidden": {
+			protStatus: http.StatusForbidden, listBody: noRulesets,
+		},
+		"classic protection errors": {
+			protStatus: http.StatusInternalServerError, listBody: noRulesets,
+		},
+		// The bug this guards: a token without admin on the repo gets a 404 whose
+		// only difference from an unprotected branch is the message. Reading it as
+		// "unprotected" reports every protection rule as a confident failure on a
+		// repo that may be fully protected.
+		"classic protection 404 for lack of admin": {
+			protStatus: http.StatusNotFound, protBody: `{"message":"Not Found"}`,
+			listBody: noRulesets,
+		},
+		// A repo with no rulesets answers 200 with an empty list, so any error
+		// here is a read failure rather than an absence.
+		"ruleset list forbidden": {
+			protStatus: http.StatusNotFound, protBody: unprotected,
+			listStatus: http.StatusForbidden,
+		},
+		"ruleset list errors": {
+			protStatus: http.StatusNotFound, protBody: unprotected,
+			listStatus: http.StatusBadGateway,
+		},
+		// Skipping an unreadable ruleset would under-count and could miss the very
+		// rule that makes the branch protected.
+		"ruleset detail unreadable": {
+			protStatus: http.StatusNotFound, protBody: unprotected,
+			listBody: oneRuleset, detailStatus: http.StatusInternalServerError,
+		},
+	}
+	for name, routes := range cases {
+		t.Run(name, func(t *testing.T) {
+			c := testClient(t, serveProtection(t, routes))
+			if _, _, ok := protection(context.Background(), c, "acme", "web", "main"); ok {
+				t.Error("protection must be unproven when a read fails, got known")
+			}
+		})
+	}
+}
+
+// The one error that is an answer: GitHub returns 404 for a branch that simply
+// has no classic protection. Paired with an empty ruleset list that proves the
+// branch is unprotected, which must stay a scorable fail rather than unknown.
+func TestProtectionUnprotectedIsKnown(t *testing.T) {
+	c := testClient(t, serveProtection(t, protectionRoutes{
+		protStatus: http.StatusNotFound,
+		protBody:   unprotected,
+		listBody:   `[]`,
+	}))
+	p, count, ok := protection(context.Background(), c, "acme", "web", "main")
+	if !ok {
+		t.Fatal("an unprotected branch is proven, not unknown")
+	}
+	if count != 0 {
+		t.Errorf("ruleset_count = %d, want 0", count)
+	}
+	if p["required_pull_request_reviews"] != false || p["require_code_owner_reviews"] != false {
+		t.Errorf("unprotected branch should score all-false, got %+v", p)
+	}
+}
+
+// An empty repository has no default branch, so there is nothing to protect —
+// a definitive answer that must not degrade to unknown.
+func TestProtectionEmptyRepoIsKnown(t *testing.T) {
+	c := testClient(t, serveProtection(t, protectionRoutes{}))
+	if _, _, ok := protection(context.Background(), c, "acme", "web", ""); !ok {
+		t.Error("a repo with no default branch is proven unprotected, got unknown")
+	}
+}
+
+// The readable path still folds classic protection and rulesets together, with
+// the stricter value winning per field.
+func TestProtectionFoldsStricter(t *testing.T) {
+	c := testClient(t, serveProtection(t, protectionRoutes{
+		protBody: `{"required_pull_request_reviews":
+			{"required_approving_review_count":1,"require_code_owner_reviews":false}}`,
+		listBody: `[{"id":1,"target":"branch","enforcement":"active"}]`,
+		detailBody: `{"conditions":{"ref_name":{"include":["~DEFAULT_BRANCH"]}},
+			"rules":[{"type":"pull_request","parameters":
+				{"required_approving_review_count":2,"require_code_owner_review":true}}],
+			"bypass_actors":[{"actor_type":"Integration"}]}`,
+	}))
+	p, count, ok := protection(context.Background(), c, "acme", "web", "main")
+	if !ok {
+		t.Fatal("both reads succeeded, want known")
+	}
+	if count != 1 {
+		t.Errorf("ruleset_count = %d, want 1", count)
+	}
+	if p["required_approving_review_count"] != 2 {
+		t.Errorf("review count = %v, want 2 (the ruleset is stricter)", p["required_approving_review_count"])
+	}
+	if p["require_code_owner_reviews"] != true {
+		t.Errorf("require_code_owner_reviews = %v, want true", p["require_code_owner_reviews"])
+	}
+}
