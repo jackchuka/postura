@@ -238,3 +238,30 @@ rules:
     title: Automated dependency updates are configured (Dependabot or Renovate)
     pass: archived == true || dependabot_config == true || renovate_config == true
     fix_hint: "Add .github/dependabot.yml (version updates) or a Renovate config (renovate.json)"
+
+  # REPO-5 only proves a CODEOWNERS file exists. These two score whether it works:
+  # GitHub silently ignores lines whose owner it can't resolve, so a file full of
+  # typo'd handles reviews as if it were empty.
+  # A repo with no CODEOWNERS has vacuously zero errors, so scope this to repos
+  # that have one — REPO-5 already scores presence, and a pass here would read as
+  # a claim about a file that doesn't exist.
+  - id: REPO-14
+    scope: repo
+    severity: warn
+    title: CODEOWNERS file has no unknown owners or syntax errors
+    applies_when: archived != true && codeowners == true
+    pass: codeowners_error_count == 0
+    fix_hint: "Open the CODEOWNERS file on GitHub to see the flagged lines; an unknown owner usually means that user or team lacks write access on the repo"
+
+  # The same defect where it actually costs something: protection claims code-owner
+  # review is required, but the unresolvable lines own nothing, so those paths merge
+  # on any ordinary approval. No CODEOWNERS at all is the worst case of this, not an
+  # exemption from it — every path merges on an ordinary approval — so the pass
+  # demands the file exists rather than trusting its vacuous zero error count.
+  - id: REPO-15
+    scope: repo
+    severity: error
+    title: Required code-owner review is not silently voided by a broken CODEOWNERS
+    applies_when: archived != true && protection.require_code_owner_reviews == true
+    pass: codeowners == true && codeowners_error_count == 0
+    fix_hint: "Code-owner review is required but GitHub cannot resolve every CODEOWNERS entry (or there is no CODEOWNERS at all); the paths those lines should own are merging without owner approval. Fix the flagged owners, add the file, or drop the requirement."
