@@ -198,3 +198,99 @@ func findingByID(fs []engine.Finding, id string) (engine.Finding, bool) {
 	}
 	return engine.Finding{}, false
 }
+
+// REPO-16 scores the remediation SLA on open Dependabot alerts. It reads the
+// nested per-severity shape collect.alertsFor emits, which compilation can't
+// check (fact fields are dyn-typed) — hence an evaluation test against
+// collector-shaped facts, as for ORG-10 and REPO-15. It also pins the two
+// choices that make the rule safe to gate on: a brand-new critical alert is
+// within SLA (age, not count, is the bar), a repo whose alerts were never swept
+// is unknown rather than clean, and a repo that is not scanning at all is out of
+// scope rather than green.
+func TestExampleREPO16MatchesCollectorShape(t *testing.T) {
+	data, err := os.ReadFile("../../examples/rules.yaml")
+	if err != nil {
+		t.Fatalf("read example ruleset: %v", err)
+	}
+	rs, err := rules.Load(data)
+	if err != nil {
+		t.Fatalf("load example ruleset: %v", err)
+	}
+	e, err := engine.New(rules.ScopeRepo, rs.ByScope(rules.ScopeRepo), collect.RepoVars)
+	if err != nil {
+		t.Fatalf("build repo engine: %v", err)
+	}
+
+	// The rule ships disabled, so enable it the way an operator would, per org.
+	cfg := &rules.Config{Orgs: map[string]map[string]map[string]any{
+		"acme": {"REPO-16": {"enabled": true}},
+	}}
+
+	// alerts is shaped exactly as collect.alertsFor emits it.
+	alerts := func(critAge, highAge int) map[string]any {
+		sev := func(age int) map[string]any {
+			count := 0
+			if age > 0 {
+				count = 1
+			}
+			return map[string]any{"count": count, "oldest_open_days": age}
+		}
+		return map[string]any{
+			"total": 0, "critical": sev(critAge), "high": sev(highAge),
+			"medium": sev(0), "low": sev(0),
+		}
+	}
+
+	// undatable is the shape a severity carries when GitHub reported an alert but
+	// no usable created_at: a count, and no age to score it against.
+	undatable := map[string]any{
+		"total": 1, "critical": map[string]any{"count": 1},
+		"high": map[string]any{"count": 0, "oldest_open_days": 0}, "medium": map[string]any{"count": 0},
+		"low": map[string]any{"count": 0},
+	}
+
+	cases := map[string]struct {
+		alerts      any
+		archived    bool
+		alertsOff   bool
+		want        engine.Status
+		wantNote    string
+		wantSkipped bool
+	}{
+		"no open alerts":                      {alerts: alerts(0, 0), want: engine.StatusPass},
+		"critical alert still inside the SLA": {alerts: alerts(3, 0), want: engine.StatusPass},
+		"critical alert past the SLA":         {alerts: alerts(30, 0), want: engine.StatusFail},
+		"high alert inside its longer SLA":    {alerts: alerts(0, 20), want: engine.StatusPass},
+		"high alert past its SLA":             {alerts: alerts(0, 45), want: engine.StatusFail},
+		"alerts never swept cannot be scored": {alerts: nil, want: engine.StatusUnknown},
+		"an alert with no age cannot be aged": {alerts: undatable, want: engine.StatusUnknown,
+			wantNote: "oldest_open_days not established by the collector"},
+		"archived repos are out of scope":     {alerts: alerts(90, 90), archived: true, wantSkipped: true},
+		"a repo not scanning is out of scope": {alerts: alerts(0, 0), alertsOff: true, wantSkipped: true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			facts := map[string]any{"archived": tc.archived, "vulnerability_alerts": !tc.alertsOff}
+			if tc.alerts != nil {
+				facts["dependabot_alerts"] = tc.alerts
+			}
+			target := engine.Target{Name: "acme/web", Facts: facts}
+			got, ok := findingByID(e.Evaluate([]engine.Target{target}, cfg, ""), "REPO-16")
+			if tc.wantSkipped {
+				if ok {
+					t.Fatalf("REPO-16 should not apply here, got status %s (notes: %q)", got.Status, got.Notes)
+				}
+				return
+			}
+			if !ok {
+				t.Fatal("no REPO-16 finding emitted")
+			}
+			if got.Status != tc.want {
+				t.Fatalf("REPO-16 status = %s, want %s (notes: %q)", got.Status, tc.want, got.Notes)
+			}
+			if tc.wantNote != "" && got.Notes != tc.wantNote {
+				t.Fatalf("REPO-16 notes = %q, want %q", got.Notes, tc.wantNote)
+			}
+		})
+	}
+}

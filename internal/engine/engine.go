@@ -200,6 +200,14 @@ func unknownNote(err error) string {
 		}
 		return "fact not readable (missing scope?)"
 	}
+	// A key absent from a fact the collector did read (cel-go's "no such key")
+	// is deliberate omission — the collector could not establish the value —
+	// not a scope problem.
+	if strings.Contains(msg, "no such key") {
+		if field := lastIdent(msg); field != "" {
+			return field + " not established by the collector"
+		}
+	}
 	return "could not evaluate: " + msg
 }
 
