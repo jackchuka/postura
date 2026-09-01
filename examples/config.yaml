@@ -13,6 +13,7 @@ orgs:
     ORG-3: { allowed_collaborators: [external-auditor, vendor-bot] } # known, expected
     ORG-9: { severity: warn } # team privacy matters more here: info -> warn
     ORG-10: { allowed_broad_teams: [sre] } # the one team allowed all-repository admin
+    REPO-16: { enabled: true, critical_days: 3 } # alert SLA on; tighter critical window
   acme-labs:
     REPO-8: { enabled: true } # flag public archived repos in this org
 

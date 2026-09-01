@@ -30,6 +30,17 @@ var (
 	}
 )
 
+// orgWide holds the results of the sweeps read once for the whole org rather
+// than per repo. Each result carries an OK flag that is false when the listing
+// could not be completed, so the repo leaves the corresponding fact absent
+// (unknown) instead of recording a false empty.
+type orgWide struct {
+	grants   map[string][]any
+	grantsOK bool
+	alerts   map[string]any
+	alertsOK bool
+}
+
 // Repos collects per-repo facts. With no names it audits every non-forked repo
 // in the org. Each returned object is fully normalized against RepoVars.
 func Repos(ctx context.Context, c *github.Client, org string, names []string) ([]map[string]any, error) {
@@ -37,10 +48,19 @@ func Repos(ctx context.Context, c *github.Client, org string, names []string) ([
 	if err != nil {
 		return nil, err
 	}
-	// Direct per-repo team grants for the whole org, read once from the team side
-	// (org-role access does not appear there). grantsOK is false if the listing
-	// could not be completed, so each repo leaves its teams fact absent (unknown).
-	grants, grantsOK := directRepoGrants(ctx, c, org)
+	// The org-wide sweeps: direct per-repo team grants, read from the team side
+	// (org-role access does not appear there), and open Dependabot alerts. Both
+	// cover every repo in one paginated listing rather than a call per repo.
+	shared := orgWide{}
+	shared.grants, shared.grantsOK = directRepoGrants(ctx, c, org)
+	// The alert sweep is worth its pages only when auditing the whole org: for an
+	// explicit subset it would page the org's entire alert set to use a handful of
+	// it, so each repo reads its own instead. Repos falls back per repo whenever
+	// the sweep is missing, which also covers a token that cannot read the org
+	// endpoint but can read the repo one.
+	if len(names) == 0 {
+		shared.alerts, shared.alertsOK = dependabotAlerts(ctx, c, org)
+	}
 	// Collect each repo's facts concurrently, writing into its own slot so the
 	// output order matches the (already deterministic) repo list.
 	out := make([]map[string]any, len(repos))
@@ -52,7 +72,7 @@ func Repos(ctx context.Context, c *github.Client, org string, names []string) ([
 		go func(i int, r *github.Repository) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			out[i] = repoFacts(ctx, c, org, r, grants, grantsOK)
+			out[i] = repoFacts(ctx, c, org, r, shared)
 		}(i, r)
 	}
 	wg.Wait()
@@ -92,7 +112,7 @@ func resolveRepos(ctx context.Context, c *github.Client, org string, names []str
 	return out, nil
 }
 
-func repoFacts(ctx context.Context, c *github.Client, org string, r *github.Repository, grants map[string][]any, grantsOK bool) map[string]any {
+func repoFacts(ctx context.Context, c *github.Client, org string, r *github.Repository, shared orgWide) map[string]any {
 	name := r.GetName()
 	f := map[string]any{
 		"name":       org + "/" + name,
@@ -147,11 +167,26 @@ func repoFacts(ctx context.Context, c *github.Client, org string, r *github.Repo
 	// org's grant map definitively has none (empty list). Left absent (unknown)
 	// only when the org grants could not be enumerated, so a rule over `teams`
 	// never sees a false empty.
-	if grantsOK {
-		if g, ok := grants[strings.ToLower(org+"/"+name)]; ok {
+	if shared.grantsOK {
+		if g, ok := shared.grants[strings.ToLower(org+"/"+name)]; ok {
 			f["teams"] = g
 		} else {
 			f["teams"] = []any{}
+		}
+	}
+
+	// Open Dependabot alerts, folded into per-severity counts and ages by the
+	// org-wide sweep when there was one, else read for this repo alone. Absent
+	// when neither listing could be completed, so a repo never reports a clean
+	// "no alerts" that only means nobody was allowed to look. A repo known to
+	// have alerts disabled is skipped outright: the sweep never mentions it (a
+	// zero-fill would be a false clean, and would differ from a repo-subset
+	// run), and its own listing is a guaranteed 403 not worth the request.
+	if f["vulnerability_alerts"] != false {
+		if shared.alertsOK {
+			f["dependabot_alerts"] = alertsFor(shared.alerts, org, name)
+		} else if a, ok := repoAlerts(ctx, c, org, name); ok {
+			f["dependabot_alerts"] = a
 		}
 	}
 

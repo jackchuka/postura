@@ -153,6 +153,7 @@ func orgTeams(ctx context.Context, c *github.Client, org string) ([]any, error) 
 func pendingInvitations(ctx context.Context, c *github.Client, org string) ([]any, error) {
 	opt := &github.ListOptions{PerPage: 100}
 	var out []any
+	now := time.Now()
 	for {
 		invs, resp, err := c.Organizations.ListPendingOrgInvitations(ctx, org, opt)
 		if err != nil {
@@ -165,7 +166,7 @@ func pendingInvitations(ctx context.Context, c *github.Client, org string) ([]an
 			}
 			row := map[string]any{"login": login, "age_days": nil}
 			if t := iv.GetCreatedAt(); !t.IsZero() {
-				row["age_days"] = int(time.Since(t.Time).Hours() / 24)
+				row["age_days"] = ageDays(now, t.Time)
 			}
 			out = append(out, row)
 		}

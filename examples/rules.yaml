@@ -265,3 +265,36 @@ rules:
     applies_when: archived != true && protection.require_code_owner_reviews == true
     pass: codeowners == true && codeowners_error_count == 0
     fix_hint: "Code-owner review is required but GitHub cannot resolve every CODEOWNERS entry (or there is no CODEOWNERS at all); the paths those lines should own are merging without owner approval. Fix the flagged owners, add the file, or drop the requirement."
+
+  # Open Dependabot alerts, scored as a remediation SLA rather than a count. A
+  # count-based bar (`critical == 0`) flips a green pipeline red the day an
+  # advisory is published, with nothing changed on your side and nothing yet to
+  # do about it; an age-based one only fires once the alert has gone unhandled
+  # past the window you set, which is the part that is actually your posture.
+  #
+  # Age is counted from the alert's created_at, which GitHub never resets: a
+  # dismissed-then-reopened (or fixed-then-regressed) alert re-enters with its
+  # full original age and can breach the window on day one — a conservative
+  # false red, since the exposure itself really is that old. A severity bucket
+  # holding an alert GitHub reported without a created_at omits its
+  # oldest_open_days entirely, so this rule reports unknown rather than
+  # trusting an age floor.
+  #
+  # Ships disabled, like any rule whose bar is a policy choice rather than a
+  # baseline: enable it per org/repo in --config once you've picked your windows.
+  - id: REPO-16
+    scope: repo
+    severity: warn
+    enabled: false
+    title: Open critical/high Dependabot alerts are within the remediation SLA
+    config:
+      critical_days: 7
+      high_days: 30
+    # Gated on alerts being enabled: the org sweep only reports repos that have
+    # them on, so a repo scanning nothing would otherwise zero-fill to a green
+    # "within SLA". A repo with them off is REPO-4's finding, not this one's.
+    applies_when: archived != true && vulnerability_alerts == true
+    pass: >-
+      dependabot_alerts.critical.oldest_open_days <= cfg.critical_days &&
+      dependabot_alerts.high.oldest_open_days <= cfg.high_days
+    fix_hint: "Security -> Dependabot alerts: upgrade the flagged dependencies, or dismiss the alerts that don't apply with a reason"

@@ -108,8 +108,11 @@ postura needs a GitHub token via `GITHUB_TOKEN` / `GH_TOKEN`, or a logged-in
 | Repo settings               | repo read                                  |
 | Org settings, owners, roles | `admin:org` read                           |
 | Enterprise account settings | enterprise-owner token (`read:enterprise`) |
+| Dependabot alerts           | `security_events`                          |
 
 Without the right scope, the relevant facts report as **unknown** rather than a false pass.
+The org-wide Dependabot alert sweep additionally needs org-owner or security-manager
+standing; without it, alerts are read per repo instead.
 
 ## Usage
 
@@ -298,6 +301,7 @@ list drifts from it. A field that couldn't be read is omitted (→ the rule repo
 | `secret_scanning`                 | secret-scanning status (`enabled`/`disabled`)                                                                                                  |
 | `secret_scanning_push_protection` | push-protection status (`enabled`/`disabled`)                                                                                                  |
 | `vulnerability_alerts`            | whether Dependabot alerts are enabled                                                                                                          |
+| `dependabot_alerts`               | open Dependabot alerts: `{total, critical, high, medium, low}`, each severity `{count, oldest_open_days}` |
 | `dependabot_config`               | whether a Dependabot version-updates config exists (`.github/dependabot.yml`)                                                                  |
 | `renovate_config`                 | whether a Renovate config exists (`renovate.json`, `.renovaterc*`, or under `.github/`)                                                        |
 | `codeowners`                      | whether a CODEOWNERS file exists                                                                                                               |
@@ -308,6 +312,19 @@ list drifts from it. A field that couldn't be read is omitted (→ the rule repo
 | `protection`                      | branch-protection facts: `{required_pull_request_reviews, required_approving_review_count, require_code_owner_reviews, pr_bypass_actor_types}` |
 
 </details>
+
+> **Note:** `dependabot_alerts` is absent when Dependabot alerts are known to be
+> turned off for the repo, and when no alert listing could be read (a token
+> without `security_events`), so a rule over it reports unknown rather than a
+> false "no alerts". The org sweep reports only repos that have alerts enabled,
+> so a rule over this fact should still gate on `vulnerability_alerts == true`
+> for the case where that flag itself is unreadable — see REPO-16 in
+> [`examples/rules.yaml`](examples/rules.yaml). Ages are computed at collect time
+> and frozen into the facts, so re-running `eval` on cached facts stays
+> reproducible; they count from the alert's `created_at`, which GitHub never
+> resets, so a reopened alert carries its full original age. A severity bucket
+> holding an alert whose age GitHub does not report omits `oldest_open_days`
+> entirely, since an undatable alert is of unknown age, not a fresh one.
 
 > **Note:** `dependabot_config` / `renovate_config` detect only *committed* config.
 > A repo onboarded to Renovate via a shared org preset (in the org's `.github`
