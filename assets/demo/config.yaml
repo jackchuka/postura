@@ -1,0 +1,6 @@
+orgs:
+  acme:
+    ORG-2: { max_admins: 8 } # larger org, higher bar
+repos:
+  acme/legacy-mirror:
+    REPO-1: { enabled: false } # read-only mirror

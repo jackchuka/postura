@@ -1,0 +1,31 @@
+rules:
+  - id: ORG-1
+    scope: org
+    severity: error
+    title: Two-factor authentication is enforced org-wide
+    pass: two_factor_requirement_enabled == true
+    fix_hint: Org Settings -> Authentication security -> Require 2FA
+
+  - id: ORG-2
+    scope: org
+    severity: warn
+    title: Owner count is proportionate to org size
+    config:
+      max_admins: 5
+    pass: admin_count <= cfg.max_admins
+    fix_hint: "Org Settings -> People: downgrade owners to members"
+
+  - id: REPO-1
+    scope: repo
+    severity: error
+    title: Default branch requires a pull request
+    pass: archived == true || protection.required_pull_request_reviews == true
+    fix_hint: Repo Settings -> Rules -> require a pull request before merging
+
+  - id: REPO-3
+    scope: repo
+    severity: error
+    title: Secret scanning is enabled (public repos)
+    applies_when: archived != true && visibility == "public"
+    pass: secret_scanning == "enabled"
+    fix_hint: Repo Settings -> Code security -> enable Secret scanning
