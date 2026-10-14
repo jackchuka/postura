@@ -1,107 +1,61 @@
 <div align="center">
 
-<h1>postura</h1>
+# postura
 
-<p>
-  <strong>A deterministic CLI that audits your GitHub enterprise, orgs, and repos<br>against a security baseline you own — rules are data, the bar is per-target.</strong>
-</p>
+**Audit your GitHub enterprise, orgs, and repos against a security baseline you own.**
 
-<p>
-  <a href="https://github.com/jackchuka/postura/actions/workflows/test.yml"><img src="https://github.com/jackchuka/postura/actions/workflows/test.yml/badge.svg" alt="Test"></a>
-  <a href="https://github.com/jackchuka/postura/releases"><img src="https://img.shields.io/github/v/release/jackchuka/postura?sort=semver" alt="Release"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
-</p>
+Rules are CEL expressions in YAML, and the bar can differ per enterprise, org, or repo.<br>
+Read-only and deterministic, so it gates cleanly in CI.
+
+[![Test](https://github.com/jackchuka/postura/actions/workflows/test.yml/badge.svg)](https://github.com/jackchuka/postura/actions/workflows/test.yml)
+[![Release](https://img.shields.io/github/v/release/jackchuka/postura?sort=semver)](https://github.com/jackchuka/postura/releases)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/jackchuka/postura)](go.mod)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+<img src="assets/demo.gif" alt="postura listing rules, showing a per-org config, and evaluating collected facts into a report" width="800">
+
+[Installation](#installation) · [Quick Start](#quick-start) · [Commands](#commands) · [Ruleset](#the-ruleset) · [Per-target configuration](#per-target-configuration) · [Facts](#facts-available-to-rules)
 
 </div>
 
 ---
 
-**postura** audits a GitHub organization's **security posture** — branch protection,
-2FA enforcement, secret scanning, outside collaborators, org-role grants, and more —
-against a **per-target-configurable** policy baseline. Rules are data
-([CEL](https://github.com/google/cel-go) expressions in YAML); the same ruleset can hold
-a different bar for each enterprise, org, or repo. It is **read-only** — it never mutates
-anything on GitHub — and **deterministic**, so it gates cleanly in CI.
+Tools like [legitify](https://github.com/Legit-Labs/legitify) apply one _global_ policy: you can turn a check off everywhere, but you can't hold different targets to different bars. [OSSF Scorecard](https://github.com/ossf/scorecard) accepts per-repo config, but each repo owns its own `.github/scorecard.yml`, and it focuses on OSS supply-chain health rather than org and enterprise settings such as 2FA enforcement, outside collaborators, or org-role grants.
 
-```console
-$ postura run --org acme --enterprise acme-inc --rules examples/rules.yaml
+**postura** keeps one centrally owned ruleset with **layered per-target overrides**: `acme` may allow 8 owners while `acme-labs` allows 5, a legacy mirror can be exempted from a rule, and the enterprise, its orgs, and their repos are all audited from the same policy. Judgment calls (owner ratio, expected outside collaborators, allowed broad org roles) become tunable thresholds and allowlists, so the result stays deterministic.
+
+## Features
+
+- **Read-only** — never writes to GitHub
+- **Rules are data** — CEL expressions in YAML, compiled at load so a typo'd field name fails fast
+- **Per-target bar** — one ruleset, with overrides per enterprise, org, and repo (most specific wins)
+- **Honest about gaps** — a fact the token can't read reports `unknown`, never a false pass
+- **Three scopes** — enterprise account settings, org settings, and per-repo posture
+- **Offline evaluation** — `collect` facts to JSON once, then `eval` against any ruleset without network access
+- **CI-native** — `--fail-on` severity gate, Markdown / JSON / SARIF output for code scanning
+- **Classic protection and rulesets** — branch protection is read from both classic protection and repository rulesets, keeping the stricter outcome
+
+## Installation
+
+### Homebrew
+
+```bash
+brew install jackchuka/tap/postura
 ```
 
-```markdown
-# GitHub audit
-
-_3 fail, 1 unknown across 12 repos + org + enterprise_
-
-### ORG-1 — Two-factor authentication is enforced org-wide (error)
-
-_1 fail, 0 unknown of 1 checked_
-
-| Target | Status  | Notes                                   |
-| ------ | ------- | --------------------------------------- |
-| acme   | ❌ fail | two_factor_requirement_enabled is false |
-
-**Fix:** Org Settings → Authentication security: require two-factor authentication
-
-### REPO-1 — Default branch requires a pull request before merging (error)
-
-_2 fail, 0 unknown of 12 checked_
-
-| Target   | Status  | Notes                                  |
-| -------- | ------- | -------------------------------------- |
-| acme/web | ❌ fail | required_approving_review_count is 0   |
-| acme/api | ❌ fail | no branch protection on default branch |
-
-**Fix:** Settings → Branches: require a pull request before merging
-
-### ENT-1 — SAML single sign-on is configured for the enterprise (error)
-
-_0 fail, 1 unknown of 1 checked_
-
-| Target   | Status     | Notes                                             |
-| -------- | ---------- | ------------------------------------------------- |
-| acme-inc | ⚠️ unknown | needs an enterprise-owner token (read:enterprise) |
-```
-
-## Why postura
-
-Tools like [legitify](https://github.com/Legit-Labs/legitify) apply a _global_ policy —
-you can disable a check everywhere, but not hold a different bar for different targets.
-[OSSF Scorecard](https://github.com/ossf/scorecard) does take per-repo config, but it's
-_decentralized_ (a `.github/scorecard.yml` each repo owns) and scoped to OSS/supply-chain
-repo health — not org/enterprise settings like 2FA enforcement, outside collaborators, or
-org-role grants.
-
-postura's difference is **centralized, layered per-target configuration**: one ruleset a
-security team operates, where `acme` may allow 8 owners while `acme-labs` allows 3, a
-legacy repo can be exempted from a rule, and enterprise + org + repo all audit from the
-same policy — no forking, no per-repo file to trust.
-
-Judgment calls (admin-count proportion, acceptable outside collaborators, allowed broad
-org-roles) are expressed as **tunable thresholds and allowlists**, so the audit stays
-fully deterministic and CI-gateable.
-
-|                       | postura                                                        |
-| --------------------- | -------------------------------------------------------------- |
-| **Read-only**         | Never writes to GitHub — pure audit                            |
-| **Rules are data**    | CEL expressions in YAML, compiled at load (typos fail fast)    |
-| **Per-target bar**    | Same ruleset, different thresholds per enterprise / org / repo |
-| **Honest about gaps** | A fact it can't read → `unknown`, never a false pass           |
-| **CI-native**         | `--fail-on` gate + SARIF output for code scanning              |
-| **Three scopes**      | Enterprise account settings, org settings, per-repo posture    |
-
-## Install
+### Go
 
 ```bash
 go install github.com/jackchuka/postura@latest
 ```
 
-Or grab a prebuilt binary from [Releases](https://github.com/jackchuka/postura/releases)
-(Linux / macOS / Windows, amd64 + arm64).
+### Binary
+
+Download a prebuilt binary (Linux / macOS / Windows, amd64 and arm64) from the [releases page](https://github.com/jackchuka/postura/releases).
 
 ### Authentication
 
-postura needs a GitHub token via `GITHUB_TOKEN` / `GH_TOKEN`, or a logged-in
-[`gh`](https://cli.github.com/) (`gh auth token` is used as a fallback).
+postura reads a GitHub token from `GITHUB_TOKEN` or `GH_TOKEN`, and falls back to `gh auth token` from a logged-in [`gh`](https://cli.github.com/).
 
 | Scope of audit              | Token requirement                          |
 | --------------------------- | ------------------------------------------ |
@@ -110,11 +64,60 @@ postura needs a GitHub token via `GITHUB_TOKEN` / `GH_TOKEN`, or a logged-in
 | Enterprise account settings | enterprise-owner token (`read:enterprise`) |
 | Dependabot alerts           | `security_events`                          |
 
-Without the right scope, the relevant facts report as **unknown** rather than a false pass.
-The org-wide Dependabot alert sweep additionally needs org-owner or security-manager
-standing; without it, alerts are read per repo instead.
+Facts the token can't read are reported as **unknown**. The org-wide Dependabot alert sweep also needs org-owner or security-manager standing; without it, alerts are read per repo.
 
-## Usage
+## Quick Start
+
+1. **Copy the example ruleset.** postura ships no built-in rules; [`examples/rules.yaml`](examples/rules.yaml) is a generic GitHub security baseline to start from.
+
+   ```bash
+   curl -sLO https://raw.githubusercontent.com/jackchuka/postura/main/examples/rules.yaml
+   postura rules list --rules rules.yaml
+   ```
+
+2. **Audit an org.** With no repo arguments, every non-forked repo in the org is included.
+
+   ```bash
+   postura run --org acme --rules rules.yaml
+   ```
+
+3. **Tune the bar per target** with a policy config (see [`examples/config.yaml`](examples/config.yaml)), then gate CI on it:
+
+   ```bash
+   postura run --org acme --rules rules.yaml --config config.yaml --fail-on warn
+   ```
+
+An excerpt of a report (from the fabricated facts in [`assets/demo/`](assets/demo)):
+
+```markdown
+# GitHub audit
+
+_3 fail, 1 unknown across 2 orgs + 4 repos_
+
+### ORG-1 — Two-factor authentication is enforced org-wide (error)
+
+_1 fail, 0 unknown of 2 checked_
+
+| Target | Status | Notes |
+|--------|--------|-------|
+| acme-labs | ❌ fail |  |
+
+**Fix:** Org Settings -> Authentication security -> Require 2FA
+
+### REPO-3 — Secret scanning is enabled (public repos) (error)
+
+_0 fail, 1 unknown of 2 checked_
+
+| Target | Status | Notes |
+|--------|--------|-------|
+| acme-labs/sandbox | ⚠️ unknown | secret_scanning not readable (missing scope?) |
+
+**Fix:** Repo Settings -> Code security -> enable Secret scanning
+```
+
+Rules whose targets all pass are listed as `✅ all N pass`.
+
+## Commands
 
 ```text
 postura run --rules R [owner/repo ...]    # collect + evaluate + report (the common case)
@@ -124,124 +127,117 @@ postura rules list --rules R              # list every rule
 postura rules explain --rules R <id>      # show a rule's CEL, config knobs, and fix hint
 ```
 
-`--rules` is required for every command except `collect`, which only gathers facts:
-`collect` writes facts; `eval` and `run` apply rules to them. postura ships **no
-built-in ruleset** — you always pass your own. A generic GitHub security baseline you can
-copy and tune lives in [`examples/rules.yaml`](examples/rules.yaml).
+`--rules` is required by every command except `collect`, which only gathers facts.
 
-With no repo arguments, every non-forked repo in the org is audited. Pass `owner/repo`
-tokens to scope to specific repos. `--org` is repeatable, so several orgs can be audited
-in one run.
+Pass `owner/repo` arguments to audit specific repos; their owner becomes the org. A bare repo name is accepted when exactly one `--org` is given.
 
 ### Flags
 
 Shared by `run` and `eval`:
 
-| Flag        | Default                          | Meaning                                                                          |
-| ----------- | -------------------------------- | -------------------------------------------------------------------------------- |
-| `--config`  | —                                | policy-config YAML with per-target overrides                                     |
-| `--rules`   | — (**required**)                 | ruleset YAML (see [`examples/rules.yaml`](examples/rules.yaml))                  |
-| `--format`  | `md`                             | `md` \| `json` \| `sarif`                                                        |
-| `--fail-on` | `error` (`run`), `none` (`eval`) | exit non-zero on a fail at/above this severity (`error`\|`warn`\|`info`\|`none`) |
+| Flag                | Default                          | Meaning                                                                          |
+| ------------------- | -------------------------------- | -------------------------------------------------------------------------------- |
+| `--rules`           | — (**required**)                 | ruleset YAML                                                                     |
+| `--config`          | —                                | policy-config YAML with per-target overrides                                     |
+| `--format`          | `md`                             | `md` \| `json` \| `sarif`                                                        |
+| `--fail-on`         | `error` (`run`), `none` (`eval`) | exit non-zero on a fail at/above this severity: `error` \| `warn` \| `info` \| `none` |
+| `--fail-on-unknown` | `false`                          | also exit non-zero on an unknown at/above `--fail-on`, so an under-scoped token can't pass the gate |
 
-Shared by `run` and `collect` (the commands that talk to GitHub):
+Shared by `run` and `collect` (the commands that call GitHub):
 
-| Flag           | Default        | Meaning                                                                                                                 |
-| -------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `--org`        | —              | org(s) to audit — repeatable/comma-separated, or inferred from `owner/repo` args; optional for an enterprise-only audit |
-| `--enterprise` | —              | enterprise slug to also audit (needs an enterprise-owner token)                                                         |
-| `--scope`      | all applicable | restrict to scopes: `enterprise` \| `org` \| `repos` (repeatable, e.g. `--scope org,repos`)                             |
+| Flag           | Default        | Meaning                                                                                                     |
+| -------------- | -------------- | ----------------------------------------------------------------------------------------------------------- |
+| `--org`        | —              | org(s) to audit; repeatable or comma-separated, or inferred from `owner/repo` args                          |
+| `--enterprise` | —              | enterprise slug to also audit (needs an enterprise-owner token)                                             |
+| `--scope`      | all applicable | limit to `enterprise` \| `org` \| `repos`; repeatable or comma-separated (`--scope org,repos`)              |
 
-`eval` takes its org/enterprise from the facts file, so it has none of the GitHub-facing
-flags above. SARIF output is uploadable to GitHub code scanning and usable as audit evidence.
+`eval` reads the org and enterprise from the facts file, so it takes none of the GitHub-facing flags.
+
+With no `--scope`, postura audits everything you named: the org and its repos when an org is given, plus the enterprise when `--enterprise` is given. Each scope needs its input, so `--scope enterprise` without `--enterprise`, or `--scope org` without an org, is an error.
+
+An enterprise is audited only for its **account-level settings**; postura does not enumerate the orgs beneath it. Name those with `--org`.
+
+### Exit codes
+
+| Code | Meaning                                                   |
+| ---- | --------------------------------------------------------- |
+| `0`  | no fail at or above `--fail-on`                           |
+| `1`  | a fail (or, with `--fail-on-unknown`, an unknown) at or above `--fail-on` |
+| `2`  | usage, config, or API error                               |
 
 ### Examples
 
 ```bash
-# Enterprise + org + every repo (default scope = all applicable)
-postura run --org acme --enterprise acme-inc --rules examples/rules.yaml
+# Enterprise + org + every repo
+postura run --org acme --enterprise acme-inc --rules rules.yaml
 
-# Several orgs in one run (repeatable or comma-separated --org)
-postura run --org acme --org acme-labs --rules examples/rules.yaml
-postura run --org acme,acme-labs --rules examples/rules.yaml
+# Several orgs in one run
+postura run --org acme,acme-labs --rules rules.yaml
 
-# Enterprise only — no --org needed (scope defaults to enterprise)
-postura run --enterprise acme-inc --rules examples/rules.yaml
+# Enterprise only (no --org needed)
+postura run --enterprise acme-inc --rules rules.yaml
 
-# Org-level checks only (skip the per-repo sweep)
-postura run --org acme --scope org --rules examples/rules.yaml
+# Org-level checks only, skipping the per-repo sweep
+postura run --org acme --scope org --rules rules.yaml
 
-# Specific repos (org inferred from the args), audited alongside the enterprise
-postura run --enterprise acme-inc acme/web acme/api --rules examples/rules.yaml
+# Specific repos (org inferred), alongside the enterprise
+postura run --enterprise acme-inc acme/web acme/api --rules rules.yaml
 
-# Collect enterprise facts to JSON, then evaluate offline
-postura collect --enterprise acme-inc --scope enterprise > facts.json
-postura eval --rules examples/rules.yaml facts.json
+# Collect once, evaluate offline
+postura collect --org acme > facts.json
+postura eval --rules rules.yaml facts.json
 
-# CI gate: fail on any warn-or-worse, emit SARIF for code scanning
+# CI gate: fail on warn or worse, emit SARIF for code scanning
 postura run --org acme --enterprise acme-inc --scope enterprise,org \
-  --fail-on warn --format sarif --rules examples/rules.yaml > postura.sarif
+  --fail-on warn --format sarif --rules rules.yaml > postura.sarif
 ```
-
-`--scope` is repeatable and comma-separated (`--scope org,repos` == `--scope org --scope
-repos`). With no `--scope`, postura audits everything nameable: org + its repos when an
-org is given, plus the enterprise when `--enterprise` is given. Each scope needs its input
-— so `--scope enterprise` without `--enterprise` (or `--scope org` with no org) is an error.
-
-An enterprise is audited only for its **account-level settings**; it does not enumerate the
-orgs beneath it. Audit those by naming them with `--org` — repos auto-expand from an org,
-but orgs are named entities.
 
 ## The ruleset
 
-You supply the ruleset with `--rules`; postura embeds none. Each rule's `pass` is a
-[CEL](https://github.com/google/cel-go) expression over the scope's fact fields (bound as
-top-level variables) plus `cfg` (the rule's merged config):
+You pass the ruleset with `--rules`; postura embeds none. Each rule's `pass` is a [CEL](https://github.com/google/cel-go) expression over the scope's [fact fields](#facts-available-to-rules), bound as top-level variables, plus `cfg` (the rule's merged config):
 
 ```yaml
-- id: ORG-2
-  scope: org
-  severity: warn
-  title: Owner/admin count is proportionate to org size
-  config:
-    max_admins: 5 # overridable per enterprise/org/repo
-    max_admin_ratio: 0.25
-  pass: >-
-    admin_count <= cfg.max_admins &&
-    (member_count == 0 || double(admin_count) / double(member_count) <= cfg.max_admin_ratio)
-  fix_hint: "Org Settings → People: review who holds Owner"
+rules:
+  - id: ORG-2
+    scope: org
+    severity: warn
+    title: Owner/admin count is proportionate to org size
+    config:
+      max_admins: 5 # overridable per enterprise/org/repo
+      max_admin_ratio: 0.25
+    pass: >-
+      admin_count <= cfg.max_admins &&
+      (member_count == 0 || double(admin_count) / double(member_count) <= cfg.max_admin_ratio)
+    fix_hint: "Org Settings -> People: review who holds Owner"
 ```
 
-- **`severity`** — `error` \| `warn` \| `info`. Drives report ordering, the `--fail-on`
-  gate, and the SARIF level (`error` → error, `warn` → warning, `info` → note).
-- **`applies_when`** — scope a rule to matching targets (e.g. public repos only).
+- **`scope`** — `enterprise` \| `org` \| `repo`.
+- **`severity`** — `error` \| `warn` \| `info`. Drives report order, the `--fail-on` gate, and the SARIF level (`error` → error, `warn` → warning, `info` → note; unknowns are always note).
+- **`applies_when`** — CEL predicate that limits a rule to matching targets (e.g. public repos only).
 - **`enabled: false`** — off by default; opt in per target via config.
 
-The whole ruleset is CEL-compiled at load, so a typo'd field name (an undeclared variable)
-fails fast there. When a fact a rule needs can't be read (e.g. missing token scope), the
-collector omits it and postura reports **unknown** (⚠️) for that target automatically — no
-rule annotation needed.
+When a fact a rule needs can't be read, the collector omits it and the finding becomes **unknown**, with no extra annotation in the rule.
 
 ## Per-target configuration
 
-A policy-config file (`--config`) overrides rule settings, merged most-specific-wins:
-**rule default → enterprise → org → repo**.
+A policy config (`--config`) overrides rule settings, merged most-specific-wins: **rule default → enterprise → org → repo**.
 
 ```yaml
-# config.yaml
+enterprises:
+  acme-inc:
+    ENT-3: { enabled: true } # opt into an off-by-default rule
 orgs:
   acme:
     ORG-2: { max_admins: 8 } # raise the bar
-    ORG-3: { allowed_collaborators: [contractor-x] } # allowlist → deterministic
+    ORG-3: { allowed_collaborators: [contractor-x] } # allowlist
   acme-labs:
-    REPO-8: { enabled: true } # opt into an off-by-default rule
+    REPO-8: { enabled: true }
 repos:
   acme/legacy-thing:
     REPO-1: { enabled: false } # exempt one repo
 ```
 
-Within a rule's block, `enabled` (bool) and `severity` (string) tune the rule; every other
-key is merged into its `cfg`.
+Within a rule's block, `enabled` (bool) and `severity` (string) tune the rule itself; every other key is merged into its `cfg`.
 
 ## Facts available to rules
 
