@@ -1,6 +1,6 @@
 module github.com/jackchuka/postura
 
-go 1.26.5
+go 1.27.3
 
 require (
 	github.com/google/cel-go v0.31.0
