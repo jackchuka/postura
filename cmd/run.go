@@ -2,10 +2,8 @@ package cmd
 
 import (
 	"context"
-	"fmt"
 	"os"
 
-	"github.com/jackchuka/postura/internal/collect"
 	"github.com/jackchuka/postura/internal/report"
 	"github.com/spf13/cobra"
 )
@@ -61,32 +59,9 @@ func runRun(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	ctx := context.Background()
-	c := collect.NewClient(ctx, token)
-	var facts Facts
-
-	if scopes.enterprise {
-		if facts.Enterprise, err = collect.Enterprise(ctx, c, runEnterprise); err != nil {
-			return fmt.Errorf("collect enterprise: %w", err)
-		}
-	}
-	if scopes.org {
-		for _, s := range specs {
-			of, err := collect.Org(ctx, c, s.name)
-			if err != nil {
-				return fmt.Errorf("collect org %s: %w", s.name, err)
-			}
-			facts.Orgs = append(facts.Orgs, of)
-		}
-	}
-	if scopes.repos {
-		for _, s := range specs {
-			rf, err := collect.Repos(ctx, c, s.name, s.repos)
-			if err != nil {
-				return fmt.Errorf("collect repos for %s: %w", s.name, err)
-			}
-			facts.Repos = append(facts.Repos, rf...)
-		}
+	facts, err := collectFacts(context.Background(), token, scopes, specs, runEnterprise, cmd.ErrOrStderr())
+	if err != nil {
+		return err
 	}
 
 	findings, err := evaluate(rs, cfg, facts, runEnterprise)

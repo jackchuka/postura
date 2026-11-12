@@ -42,11 +42,17 @@ type orgWide struct {
 }
 
 // Repos collects per-repo facts. With no names it audits every non-forked repo
-// in the org. Each returned object is fully normalized against RepoVars.
-func Repos(ctx context.Context, c *github.Client, org string, names []string) ([]map[string]any, error) {
-	repos, err := resolveRepos(ctx, c, org, names)
+// the owner owns. owner is an org, or a user account when owner.User is set; a
+// user account has no org-wide sweeps, so those facts come out unknown. Each
+// returned object is fully normalized against RepoVars.
+func Repos(ctx context.Context, c *github.Client, owner Owner, names []string) ([]map[string]any, error) {
+	org := owner.Login
+	repos, err := resolveRepos(ctx, c, owner, names)
 	if err != nil {
 		return nil, err
+	}
+	if owner.User {
+		return collectRepoFacts(ctx, c, org, repos, orgWide{}), nil
 	}
 	// The org-wide sweeps: direct per-repo team grants, read from the team side
 	// (org-role access does not appear there), and open Dependabot alerts. Both
@@ -61,6 +67,10 @@ func Repos(ctx context.Context, c *github.Client, org string, names []string) ([
 	if len(names) == 0 {
 		shared.alerts, shared.alertsOK = dependabotAlerts(ctx, c, org)
 	}
+	return collectRepoFacts(ctx, c, org, repos, shared), nil
+}
+
+func collectRepoFacts(ctx context.Context, c *github.Client, org string, repos []*github.Repository, shared orgWide) []map[string]any {
 	// Collect each repo's facts concurrently, writing into its own slot so the
 	// output order matches the (already deterministic) repo list.
 	out := make([]map[string]any, len(repos))
@@ -76,10 +86,14 @@ func Repos(ctx context.Context, c *github.Client, org string, names []string) ([
 		}(i, r)
 	}
 	wg.Wait()
-	return out, nil
+	return out
 }
 
-func resolveRepos(ctx context.Context, c *github.Client, org string, names []string) ([]*github.Repository, error) {
+func resolveRepos(ctx context.Context, c *github.Client, owner Owner, names []string) ([]*github.Repository, error) {
+	org := owner.Login
+	if owner.User && len(names) == 0 {
+		return userRepos(ctx, c, owner)
+	}
 	if len(names) > 0 {
 		var out []*github.Repository
 		for _, n := range names {
