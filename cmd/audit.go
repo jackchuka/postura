@@ -1,6 +1,10 @@
 package cmd
 
 import (
+	"context"
+	"fmt"
+	"io"
+
 	"github.com/jackchuka/postura/internal/collect"
 	"github.com/jackchuka/postura/internal/engine"
 	"github.com/jackchuka/postura/internal/rules"
@@ -87,4 +91,47 @@ func normalizeNumbers(v any) any {
 		return t
 	}
 	return v
+}
+
+// collectFacts gathers the facts for the resolved scopes. Org scope applies to
+// organizations only: a user-account owner is skipped there (with a note on
+// warn), and its repos are still collected.
+func collectFacts(ctx context.Context, token string, scopes scopeSet, specs []orgSpec, enterprise string, warn io.Writer) (Facts, error) {
+	c := collect.NewClient(ctx, token)
+	var f Facts
+	if scopes.enterprise {
+		e, err := collect.Enterprise(ctx, c, enterprise)
+		if err != nil {
+			return f, fmt.Errorf("collect enterprise: %w", err)
+		}
+		f.Enterprise = e
+	}
+	if !scopes.org && !scopes.repos {
+		return f, nil
+	}
+	for _, s := range specs {
+		owner, err := collect.ResolveOwner(ctx, c, s.name)
+		if err != nil {
+			return f, err
+		}
+		if scopes.org {
+			if owner.User {
+				_, _ = fmt.Fprintf(warn, "note: %s is a user account; skipping org scope\n", s.name)
+			} else {
+				of, err := collect.Org(ctx, c, s.name)
+				if err != nil {
+					return f, fmt.Errorf("collect org %s: %w", s.name, err)
+				}
+				f.Orgs = append(f.Orgs, of)
+			}
+		}
+		if scopes.repos {
+			rf, err := collect.Repos(ctx, c, owner, s.repos)
+			if err != nil {
+				return f, fmt.Errorf("collect repos for %s: %w", s.name, err)
+			}
+			f.Repos = append(f.Repos, rf...)
+		}
+	}
+	return f, nil
 }
