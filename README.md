@@ -340,6 +340,10 @@ list drifts from it. A field that couldn't be read is omitted (→ the rule repo
 cache facts and re-evaluate offline against different rulesets. Branch protection is read
 from **both** classic protection and repository rulesets, folding the stricter outcome.
 
+## Related
+
+- [gh-owned](https://github.com/jackchuka/gh-owned) reads the same settings from one developer's side: which repos you are responsible for through CODEOWNERS and required reviewers, and whether your approval alone can merge there. Use postura to audit that the org's protection meets your baseline; use gh-owned to see your own share of it.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
